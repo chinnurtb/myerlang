@@ -1,0 +1,139 @@
+#! /bin/sh
+
+#---------------------------------------------------------------------
+#                           chicken and egg                           
+#---------------------------------------------------------------------
+
+test -f "${FW_ROOT}/share/fw/sh/fw-find.sh" && fws="${FW_ROOT}/share/fw/sh/fw-find.sh"
+test -f "fw/sh/fw-find.sh" && fws="fw/sh/fw-find.sh"
+test -f "fw.local/sh/fw-find.sh" && fws="fw.local/sh/fw-find.sh"
+test ! -z "$fws" || {
+  echo "package/deb/make-package: fatal: can't locate fw-find.sh" 1>&2
+  exit 1
+}
+
+. "$fws"
+
+#---------------------------------------------------------------------
+#                              routines                               
+#---------------------------------------------------------------------
+
+fw_source "package/deb/make-package" "sh/fatal.sh"
+fw_source "package/deb/make-package" "sh/fw-exec.sh"
+fw_source "package/deb/make-package" "sh/parse-args.sh"
+fw_source "package/deb/make-package" "sh/validate-args.sh"
+
+# TODO: this seems somewhat C/C++ specific ... can we move this
+# into those templates somehow?
+
+get_automatic_dependencies () \
+  {
+    local _libs;
+    local _depends;
+
+    _libs=`
+      find "$destdir" -perm +111 -type f | xargs "$ldd" $ldd_args 2>/dev/null |   \
+      perl -lne 'm%=> (/.*?) \(0x% && do { 
+                    $x = $1; 
+                    $x =~ s/(\s)/\134$1/g; 
+                    print $x; 
+                 };
+                 m%(/.*?) \(comp% && do {
+                    $x = $1; 
+                    $x =~ s/(\s)/\134$1/g; 
+                    print $x; 
+                 }'`
+
+    _depends=`
+      (
+        dpkg --search $_libs 2>/dev/null |                              \
+        perl -lne 'm%^(.*?): /% && do { 
+                    print STDERR "package/deb/make-package: warning: adding inferred dependency $1"; 
+                    print $1
+                   }'
+        perl -e 'print join "\n", split /,/, $ARGV[0]' "$FW_PACKAGE_DEPENDS"
+      ) |                                                               \
+      perl -ne 'chomp; 
+                next if $seen{$_}++; 
+                print ", " unless ! $first++;
+                print "$_";'`
+
+    eval $1=\"\$_depends\"
+  }
+
+make_control_files () \
+  {
+    local description
+
+    mkdir "$destdir"/DEBIAN || fatal "package/deb/make-package"
+    chmod 755 "$destdir"/DEBIAN || fatal "package/deb/make-package"
+
+    description=`echo "$FW_PACKAGE_DESCRIPTION" | perl -ne 'print " $_";'`
+
+    priority=${FW_PACKAGE_PRIORITY:-"Optional"}
+
+    get_automatic_dependencies depends
+
+    cat <<EOD > "$destdir"/DEBIAN/control
+Package: $package
+Version: $version
+Architecture: $arch
+Maintainer: $FW_PACKAGE_MAINTAINER
+Description: $FW_PACKAGE_SHORT_DESCRIPTION
+$description
+Depends: $depends
+Conflicts: $FW_PACKAGE_CONFLICTS
+Provides: $FW_PACKAGE_PROVIDES
+Replaces: $FW_PACKAGE_REPLACES
+Priority: $priority
+
+EOD
+
+    for x in pre-install post-install pre-remove post-remove
+      do
+        target=`echo "$x" | perl -pe 's%^post-%post%;
+                                      s%^pre-%pre%; 
+                                      s%install%inst%;
+                                      s%remove%rm%;'`
+        test ! -f "fw-pkgin/$x" ||                              \
+        cp -f "fw-pkgin/$x" ""$destdir"/DEBIAN/$target" ||       \
+        fatal "package/deb/make-package"
+      done
+
+    for x in start stop
+      do
+        test -f "fw-pkgin/$x" &&                                	\
+        echo "package/deb/make-package: warning: $x hook not supported" 1>&2
+      done
+  }
+
+#---------------------------------------------------------------------
+#                                main                                 
+#---------------------------------------------------------------------
+
+parse_args "package/deb/make-package" "$@"
+
+validate_args "package/deb/make-package" "destdir ldd outdir release template" "template"
+
+which dpkg >/dev/null 2>/dev/null || {
+  echo "package/deb/make-package: error: dpkg not installed" 1>&2
+  fatal "package/deb/make-package"
+}
+
+eval `fw_exec "template/$template/load-config"`
+
+package=`echo "$FW_PACKAGE_NAME" | perl -pe 'chomp; tr%A-Z%a-z%; s%[^\w\+\-]%-%g;'`
+version=`echo "$FW_PACKAGE_VERSION" | perl -pe 'chomp; s%[^\w\.\+]%.%g;'`
+
+if test "$FW_PACKAGE_ARCHITECTURE_DEPENDENT" = "1"
+  then
+    arch="`dpkg --print-installation-architecture`"
+  else
+    arch="all"
+  fi
+
+test "$release" = yes || version="${version}-TEST1"
+
+make_control_files
+
+dpkg --build "$destdir" "${outdir}/${package}_${version}_${arch}.deb"

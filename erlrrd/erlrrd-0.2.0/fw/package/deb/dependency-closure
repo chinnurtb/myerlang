@@ -1,0 +1,29 @@
+#! /usr/bin/perl
+
+use File::Basename;
+
+BEGIN {
+  unshift @INC, dirname ($0);
+};
+
+use FwDebPackage;
+use strict;
+
+#---------------------------------------------------------------------
+#                                main                                 
+#---------------------------------------------------------------------
+
+my $usage = "usage: $0 arch depends release\n";
+
+my $arch = $ARGV[0] or die $usage;
+my $depends = $ARGV[1] or die $usage;
+my $release = $ARGV[2] or die $usage;
+
+my ($state, $virtual) = get_state ();
+
+my @packages = parse_depends ($state, $arch, $depends, $release);
+
+my @closure = 
+  get_dependencies_closure ($state, $virtual, $arch, $release, @packages);
+
+print join ", ", map { my $v = $state->{$_}; "$_ (=$v)" } @closure;

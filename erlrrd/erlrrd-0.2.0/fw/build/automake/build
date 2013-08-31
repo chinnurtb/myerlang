@@ -1,0 +1,18 @@
+#! /bin/sh
+
+#---------------------------------------------------------------------
+#                                build                                
+# 
+# This script indicates how to build the source after bootstrap.
+#---------------------------------------------------------------------
+
+makearg=""
+
+if test -z "$MAKE"
+  then
+    gmake="`which gmake`"
+
+    test $? = 0 && makearg="MAKE=gmake"
+  fi
+
+./configure $makearg --enable-maintainer-mode "$@" && make -s

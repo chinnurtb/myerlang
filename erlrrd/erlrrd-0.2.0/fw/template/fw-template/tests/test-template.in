@@ -1,0 +1,21 @@
+#! /bin/sh
+
+(
+set -x
+test -h share || ln -sf .. share || exit 1
+rm -rf tmp 
+FW_ROOT="`pwd`"
+export FW_ROOT
+fw-init --name tmp                              \
+        --revision none                         \
+        --template "__TEMPLATE_TYPE__"          || exit 1
+cd tmp
+./bootstrap || exit 1
+./build || exit 1
+make -s check || exit 1
+make -s maintainer-clean
+test -z "`find . -name '*.am'`" || exit 1
+) > test-template.out 2>&1 || exit 1
+
+rm share || exit 1
+rm -rf tmp || exit 1

@@ -1,0 +1,135 @@
+#! /bin/sh
+
+#---------------------------------------------------------------------
+#                            make-app-file                            
+# 
+# Creates the Erlang application file by scanning the source directory.
+#---------------------------------------------------------------------
+
+#---------------------------------------------------------------------
+#                           chicken and egg                           
+#---------------------------------------------------------------------
+
+which perl >/dev/null 2>/dev/null || {
+  echo "erlang/init: fatal: can't locate perl" 1>&2
+  exit 1
+}
+
+if test -z "${FW_ROOT}"
+  then
+    FW_ROOT=`echo "$0" | perl -pe 's%fw/template/erlang/init$%%;'`
+    export FW_ROOT
+  fi
+
+test -f "${FW_ROOT}/share/fw/sh/fw-find.sh" || {
+  echo "erlang/init: fatal: can't determine FW_ROOT" 1>&2
+  echo "erlang/init: please set the environment variable" 1>&2
+  exit 1
+}
+
+. "${FW_ROOT}/share/fw/sh/fw-find.sh"
+
+#---------------------------------------------------------------------
+#                              routines                               
+#---------------------------------------------------------------------
+
+fw_source "erlang/load-config" "sh/fw-exec.sh"
+fw_source "erlang/load-config" "sh/parse-args.sh"
+fw_source "erlang/load-config" "sh/validate-args.sh"
+
+maybe_prefix_comma () \
+  {
+    local val
+
+    eval val=\"\$$1\"
+
+    case "$val" in
+      "")
+        ;;
+      ,*)
+        ;;
+      *)
+        eval $1=\", \$$1\"
+        ;;
+    esac
+  }
+
+#---------------------------------------------------------------------
+#                                main                                 
+#---------------------------------------------------------------------
+
+parse_args "erlang/make-app-file" "$@"
+
+validate_args "erlang/make-app-file" "top" ""
+
+cd "$top" || exit 1
+
+eval `fw_exec "template/erlang/load-config"`
+
+test $? = 0 || exit 1
+
+if test -z "$FW_ERL_APP_MODULES"
+  then
+    FW_ERL_APP_MODULES=`find src -name '*.erl' -print | \
+                        xargs perl -ne 'm/^-module\s*\((.*?)\)/ && 
+                                        do { print ", " if $f; 
+                                             print "$1"; 
+                                             $f = 1; 
+                                           };'`
+  fi
+
+if test -z "$FW_ERL_APP_REGISTERED"
+  then
+    FW_ERL_APP_REGISTERED=`find src -name '*.erl' -print |                \
+                           xargs perl -ne                                 \
+                             'm/^-module\s*\((.*?)\)/ && do { $m = $1 };
+                              m/\bregister\s*\(\s*([^\s,]+?)\s*,/ && 
+                              do { print ", " if $f; 
+                                   print "$1"; 
+                                   $f = 1; 
+                                 };
+                              m/gen_[^:]+:start(?:_link)?\s*\(\s*\{\s*local\s*,\s*([^\s,\}]+?)\s*\}/ &&
+                              do { print ", " if $f; 
+                                   $reg = $1;
+                                   $reg =~ s/\?MODULE/$m/g;
+                                   print "$reg"; 
+                                   $f = 1; 
+                                 };
+                                 '`
+  fi
+
+if test -z "$FW_ERL_APP_START_MODULE"
+  then
+    FW_ERL_APP_START_MODULE=`find src -name '*.erl' -print |                \
+                             xargs grep -l                                  \
+                               '^-behaviou\?r[[:space:]]*(application)' |   \
+                             xargs perl -lne                                \
+                               'do { print $1; exit 0; } 
+                                if m%^-module\s*\(([^\)]+)\)%'`
+  fi
+
+if test -z "$FW_ERL_APP_START_ARGS"
+  then
+    FW_ERL_APP_START_ARGS="[]"
+  fi
+
+if test -z "$FW_ERL_APP_MOD_LINE"
+  then
+    if test -n "$FW_ERL_APP_START_MODULE"
+      then
+        FW_ERL_APP_MOD_LINE="{ mod, { $FW_ERL_APP_START_MODULE, $FW_ERL_APP_START_ARGS } },"
+      fi
+  fi
+
+if test -z "$FW_ERL_APP_ENVIRONMENT"
+  then
+    FW_ERL_APP_ENVIRONMENT="[]"
+  fi
+
+maybe_prefix_comma FW_ERL_PREREQ_APPLICATIONS
+maybe_prefix_comma FW_ERL_PREREQ_APPLICATIONS_EXTRA
+maybe_prefix_comma FW_ERL_APP_EXTRA
+
+eval `perl -ne 'while (m/@(\S+)@/g) { print "export $1; "; }' src/fw-erl-app-template.app.in`
+
+perl -pe 's/@(\S+)@/$ENV{$1}/g;' src/fw-erl-app-template.app.in > src/fw-erl-app-template.app
